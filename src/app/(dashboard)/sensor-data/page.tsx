@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSensorData, useKandangs, useCreateSensorData, useUpdateSensorData } from "@/hooks/useApi";
+import { useLiveSensorData, LiveSensorReading } from "@/hooks/useLiveSensorData";
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
     ResponsiveContainer, AreaChart, Area, BarChart, Bar,
@@ -26,24 +27,8 @@ export default function SensorDataPage() {
     const { mutate: createSensorData, loading: creating } = useCreateSensorData();
     const { mutate: updateSensorData, loading: updating } = useUpdateSensorData();
 
-    // Auto-refresh every 15 seconds
-    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
-
-    const doRefresh = useCallback(() => {
-        refetch();
-        setLastUpdated(new Date());
-    }, [refetch]);
-
-    useEffect(() => {
-        if (kandangId) {
-            setLastUpdated(new Date());
-            intervalRef.current = setInterval(doRefresh, 15000);
-        }
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, [kandangId, doRefresh]);
+    // WebSocket real-time data
+    const { connected, liveReadings, lastReceived } = useLiveSensorData();
 
     const [showForm, setShowForm] = useState(false);
     const [activeTab, setActiveTab] = useState<"charts" | "table">("charts");
@@ -90,7 +75,16 @@ export default function SensorDataPage() {
         );
     }
 
-    const rawData = sensorData?.items || [];
+    // Merge live WS readings with initial API data
+    // liveReadings are newest-first, rawApiData are also newest-first
+    const rawApiData = sensorData?.items || [];
+    const rawData = useMemo(() => {
+        if (liveReadings.length === 0) return rawApiData;
+        // Deduplicate: live readings may overlap with API data
+        const apiIds = new Set(rawApiData.map((r: any) => r.id));
+        const uniqueLive = liveReadings.filter(lr => !apiIds.has(lr.id));
+        return [...uniqueLive, ...rawApiData];
+    }, [liveReadings, rawApiData]);
     const canInput = session?.user?.role === "admin" || session?.user?.role === "pemilik" || session?.user?.role === "peternak";
 
     // Prepare chart data (reverse to chronological order, oldest first)
@@ -220,16 +214,16 @@ export default function SensorDataPage() {
                     <div className="flex items-center gap-2 mt-1">
                         <p className="text-gray-500">{kandang.nama}</p>
                         <span className="text-gray-300">·</span>
-                        <span className="flex items-center gap-1.5 text-xs text-green-600">
+                        <span className={`flex items-center gap-1.5 text-xs ${connected ? "text-green-600" : "text-gray-400"}`}>
                             <span className="relative flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+                                <span className={`relative inline-flex rounded-full h-2 w-2 ${connected ? "bg-green-500" : "bg-gray-400"}`}></span>
                             </span>
-                            Live · Auto-refresh 15s
+                            {connected ? "Live" : "Connecting..."}
                         </span>
-                        {lastUpdated && (
+                        {lastReceived && (
                             <span className="text-xs text-gray-400">
-                                Update: {lastUpdated.toLocaleTimeString("id-ID")}
+                                Data terakhir: {lastReceived.toLocaleTimeString("id-ID")}
                             </span>
                         )}
                     </div>

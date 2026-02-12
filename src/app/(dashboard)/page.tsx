@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useKandangs, useNotifications, useSensorData } from "@/hooks/useApi";
+import { useLiveSensorData } from "@/hooks/useLiveSensorData";
 
 export default function DashboardPage() {
     const { data: session, status } = useSession();
@@ -21,18 +22,11 @@ export default function DashboardPage() {
         kandangId ? { kandang_id: kandangId } : undefined
     );
 
-    // Auto-refresh dashboard every 20 seconds
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
-    useEffect(() => {
-        if (kandangId) {
-            intervalRef.current = setInterval(() => {
-                refetchSensor();
-            }, 20000);
-        }
-        return () => {
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, [kandangId, refetchSensor]);
+    // Real-time: refetch when new sensor data arrives via WebSocket
+    const onNewData = useCallback(() => {
+        refetchSensor();
+    }, [refetchSensor]);
+    useLiveSensorData(onNewData);
 
     if (status === "loading") {
         return (
