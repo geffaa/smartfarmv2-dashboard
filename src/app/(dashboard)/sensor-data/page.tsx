@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSensorData, useKandangs, useCreateSensorData, useUpdateSensorData } from "@/hooks/useApi";
+import {
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+    ResponsiveContainer, AreaChart, Area, BarChart, Bar,
+} from "recharts";
 
 export default function SensorDataPage() {
     const { data: session, status } = useSession();
@@ -23,6 +27,7 @@ export default function SensorDataPage() {
     const { mutate: updateSensorData, loading: updating } = useUpdateSensorData();
 
     const [showForm, setShowForm] = useState(false);
+    const [activeTab, setActiveTab] = useState<"charts" | "table">("charts");
     const [formData, setFormData] = useState({
         hari_ke: "",
         tanggal: new Date().toISOString().split("T")[0],
@@ -38,14 +43,10 @@ export default function SensorDataPage() {
     const [formError, setFormError] = useState("");
     const [formSuccess, setFormSuccess] = useState("");
 
-    // Edit modal state
+    // Edit modal
     const [editingRow, setEditingRow] = useState<any>(null);
     const [editData, setEditData] = useState({
-        pakan: "",
-        minum: "",
-        bobot: "",
-        populasi: "",
-        death: "",
+        pakan: "", minum: "", bobot: "", populasi: "", death: "",
     });
     const [editError, setEditError] = useState("");
     const [editSuccess, setEditSuccess] = useState("");
@@ -70,10 +71,37 @@ export default function SensorDataPage() {
         );
     }
 
-    const data = sensorData?.items || [];
+    const rawData = sensorData?.items || [];
     const canInput = session?.user?.role === "admin" || session?.user?.role === "pemilik" || session?.user?.role === "peternak";
 
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    // Prepare chart data (reverse to chronological order, oldest first)
+    const chartData = [...rawData].reverse().map((row: any) => ({
+        time: new Date(row.timestamp).toLocaleString("id-ID", {
+            hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short"
+        }),
+        suhu: row.suhu,
+        kelembaban: row.kelembaban,
+        amoniak: row.amoniak,
+        populasi: row.populasi,
+        death: row.death ?? 0,
+        pakan: row.pakan ?? 0,
+        minum: row.minum ?? 0,
+        hari_ke: row.hari_ke,
+    }));
+
+    // Summary stats
+    const latestRow = rawData[0];
+    const stats = rawData.length > 0 ? {
+        avgSuhu: (rawData.reduce((a: number, b: any) => a + (b.suhu || 0), 0) / rawData.length).toFixed(1),
+        avgHum: (rawData.reduce((a: number, b: any) => a + (b.kelembaban || 0), 0) / rawData.length).toFixed(1),
+        avgAmmo: (rawData.reduce((a: number, b: any) => a + (b.amoniak || 0), 0) / rawData.length).toFixed(1),
+        totalDeath: rawData.reduce((a: number, b: any) => a + (b.death || 0), 0),
+        maxSuhu: Math.max(...rawData.map((r: any) => r.suhu || 0)).toFixed(1),
+        minSuhu: Math.min(...rawData.map((r: any) => r.suhu || 0)).toFixed(1),
+    } : null;
+
+    // Handlers
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
         setFormError("");
     };
@@ -82,13 +110,10 @@ export default function SensorDataPage() {
         e.preventDefault();
         setFormError("");
         setFormSuccess("");
-
-        // Create timestamp from tanggal and jam
         const timestamp = `${formData.tanggal}T${formData.jam}:00`;
-
         const payload: any = {
             kandang_id: kandangId,
-            timestamp: timestamp,
+            timestamp,
             hari_ke: parseInt(formData.hari_ke) || 1,
             suhu: parseFloat(formData.suhu) || 0,
             kelembaban: parseFloat(formData.kelembaban) || 0,
@@ -98,23 +123,14 @@ export default function SensorDataPage() {
             populasi: parseInt(formData.populasi) || undefined,
             bobot: parseFloat(formData.bobot) || undefined,
         };
-
         const result = await createSensorData(payload);
-
         if (result.success) {
-            setFormSuccess("Data sensor berhasil disimpan! Prediksi ML akan berjalan otomatis.");
+            setFormSuccess("Data sensor berhasil disimpan! Prediksi ML otomatis berjalan.");
             setShowForm(false);
             setFormData({
-                hari_ke: "",
-                tanggal: new Date().toISOString().split("T")[0],
+                hari_ke: "", tanggal: new Date().toISOString().split("T")[0],
                 jam: new Date().toTimeString().slice(0, 5),
-                suhu: "",
-                kelembaban: "",
-                amoniak: "",
-                pakan: "",
-                minum: "",
-                populasi: "",
-                bobot: "",
+                suhu: "", kelembaban: "", amoniak: "", pakan: "", minum: "", populasi: "", bobot: "",
             });
             refetch();
         } else {
@@ -122,7 +138,6 @@ export default function SensorDataPage() {
         }
     };
 
-    // Edit handlers
     const openEditModal = (row: any) => {
         setEditingRow(row);
         setEditData({
@@ -144,24 +159,16 @@ export default function SensorDataPage() {
     const handleEditSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setEditError("");
-        setEditSuccess("");
-
         const payload: any = {};
         if (editData.pakan !== "") payload.pakan = parseFloat(editData.pakan);
         if (editData.minum !== "") payload.minum = parseFloat(editData.minum);
         if (editData.bobot !== "") payload.bobot = parseFloat(editData.bobot);
         if (editData.populasi !== "") payload.populasi = parseInt(editData.populasi);
         if (editData.death !== "") payload.death = parseInt(editData.death);
-
         const result = await updateSensorData(editingRow.id, payload);
-
         if (result.success) {
             setEditSuccess("Data berhasil diupdate!");
-            setTimeout(() => {
-                setEditingRow(null);
-                setEditSuccess("");
-                refetch();
-            }, 1500);
+            setTimeout(() => { setEditingRow(null); setEditSuccess(""); refetch(); }, 1500);
         } else {
             setEditError(result.error || "Gagal mengupdate data");
         }
@@ -173,60 +180,86 @@ export default function SensorDataPage() {
         return <Badge variant="success">Normal</Badge>;
     };
 
-    const formatTimestamp = (timestamp: string) => {
-        try {
-            const date = new Date(timestamp);
-            return date.toLocaleString("id-ID");
-        } catch {
-            return timestamp;
-        }
+    const formatTimestamp = (ts: string) => {
+        try { return new Date(ts).toLocaleString("id-ID"); } catch { return ts; }
+    };
+
+    const customTooltipStyle = {
+        backgroundColor: "#fff",
+        border: "1px solid #e5e7eb",
+        borderRadius: "12px",
+        padding: "12px 16px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
     };
 
     return (
         <div className="space-y-6">
-            {/* Page Header */}
+            {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">Data Sensor</h1>
-                    <p className="text-gray-500 mt-1">
-                        {kandang.nama} — Data sensor IoT real-time
-                    </p>
+                    <p className="text-gray-500 mt-1">{kandang.nama} — Monitoring IoT real-time</p>
                 </div>
-                {canInput && (
-                    <Button onClick={() => setShowForm(!showForm)}>
-                        {showForm ? (
-                            <>
-                                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                                Tutup Form
-                            </>
-                        ) : (
-                            <>
-                                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                                </svg>
-                                Input Manual
-                            </>
-                        )}
-                    </Button>
-                )}
+                <div className="flex items-center gap-3">
+                    {/* Tabs */}
+                    <div className="flex bg-gray-100 rounded-lg p-1">
+                        <button
+                            onClick={() => setActiveTab("charts")}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === "charts"
+                                ? "bg-white text-gray-900 shadow-sm"
+                                : "text-gray-500 hover:text-gray-700"
+                                }`}
+                        >
+                            📊 Grafik
+                        </button>
+                        <button
+                            onClick={() => setActiveTab("table")}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === "table"
+                                ? "bg-white text-gray-900 shadow-sm"
+                                : "text-gray-500 hover:text-gray-700"
+                                }`}
+                        >
+                            📋 Tabel
+                        </button>
+                    </div>
+                    {canInput && (
+                        <Button onClick={() => setShowForm(!showForm)}>
+                            {showForm ? "✕ Tutup" : "+ Input Manual"}
+                        </Button>
+                    )}
+                </div>
             </div>
 
-            {/* Auto-prediction info */}
-            <Card>
-                <CardContent className="flex items-center gap-3 py-3">
-                    <div className="p-2 rounded-lg bg-green-50 text-green-600">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
+            {/* Summary stat cards */}
+            {stats && (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="bg-gradient-to-br from-yellow-50 to-orange-50 rounded-xl p-4 border border-yellow-100">
+                        <p className="text-xs text-yellow-600 font-medium">Avg Suhu</p>
+                        <p className="text-xl font-bold text-gray-900">{stats.avgSuhu}°C</p>
+                        <p className="text-xs text-gray-400 mt-1">{stats.minSuhu}—{stats.maxSuhu}°C</p>
                     </div>
-                    <div>
-                        <p className="text-sm font-medium text-gray-900">Prediksi Otomatis Aktif</p>
-                        <p className="text-xs text-gray-500">Setiap data sensor baru akan otomatis dianalisis oleh model ML (klasifikasi + forecast kematian)</p>
+                    <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+                        <p className="text-xs text-blue-600 font-medium">Avg Kelembaban</p>
+                        <p className="text-xl font-bold text-gray-900">{stats.avgHum}%</p>
                     </div>
-                </CardContent>
-            </Card>
+                    <div className="bg-gradient-to-br from-orange-50 to-red-50 rounded-xl p-4 border border-orange-100">
+                        <p className="text-xs text-orange-600 font-medium">Avg Amoniak</p>
+                        <p className="text-xl font-bold text-gray-900">{stats.avgAmmo} ppm</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+                        <p className="text-xs text-green-600 font-medium">Populasi</p>
+                        <p className="text-xl font-bold text-gray-900">{latestRow?.populasi?.toLocaleString() || "-"}</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-red-50 to-pink-50 rounded-xl p-4 border border-red-100">
+                        <p className="text-xs text-red-600 font-medium">Total Kematian</p>
+                        <p className="text-xl font-bold text-red-600">{stats.totalDeath}</p>
+                    </div>
+                    <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl p-4 border border-purple-100">
+                        <p className="text-xs text-purple-600 font-medium">Total Data</p>
+                        <p className="text-xl font-bold text-gray-900">{rawData.length}</p>
+                    </div>
+                </div>
+            )}
 
             {/* Success Message */}
             {formSuccess && (
@@ -235,12 +268,10 @@ export default function SensorDataPage() {
                 </div>
             )}
 
-            {/* Input Form (no kandang dropdown — auto-assigned) */}
+            {/* Input Form */}
             {showForm && (
                 <Card>
-                    <CardHeader>
-                        <CardTitle>Input Data Sensor Manual</CardTitle>
-                    </CardHeader>
+                    <CardHeader><CardTitle>Input Data Sensor Manual</CardTitle></CardHeader>
                     <CardContent>
                         <form onSubmit={handleSubmit} className="space-y-4">
                             {formError && (
@@ -248,7 +279,6 @@ export default function SensorDataPage() {
                                     <p className="text-red-700 text-sm">{formError}</p>
                                 </div>
                             )}
-
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Hari Ke-</label>
@@ -263,7 +293,6 @@ export default function SensorDataPage() {
                                     <Input type="time" name="jam" value={formData.jam} onChange={handleInputChange} />
                                 </div>
                             </div>
-
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Suhu (°C)</label>
@@ -282,7 +311,6 @@ export default function SensorDataPage() {
                                     <Input type="number" step="0.01" name="bobot" value={formData.bobot} onChange={handleInputChange} placeholder="1.2" />
                                 </div>
                             </div>
-
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Pakan (kg)</label>
@@ -297,102 +325,15 @@ export default function SensorDataPage() {
                                     <Input type="number" name="populasi" value={formData.populasi} onChange={handleInputChange} placeholder="4850" />
                                 </div>
                             </div>
-
                             <div className="flex justify-end gap-3 pt-4">
-                                <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
-                                    Batal
-                                </Button>
+                                <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>Batal</Button>
                                 <Button type="submit" disabled={creating}>
-                                    {creating ? (
-                                        <>
-                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                                            Menyimpan...
-                                        </>
-                                    ) : (
-                                        "Simpan Data"
-                                    )}
+                                    {creating ? "Menyimpan..." : "Simpan Data"}
                                 </Button>
                             </div>
                         </form>
                     </CardContent>
                 </Card>
-            )}
-
-            {/* Edit Modal */}
-            {editingRow && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
-                        <div className="p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-bold text-gray-900">Edit Data Manual</h3>
-                                <button
-                                    onClick={() => setEditingRow(null)}
-                                    className="text-gray-400 hover:text-gray-600 transition-colors"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            </div>
-
-                            <p className="text-sm text-gray-500 mb-4">
-                                Hari {editingRow.hari_ke} · {formatTimestamp(editingRow.timestamp)}
-                            </p>
-
-                            <form onSubmit={handleEditSubmit} className="space-y-4">
-                                {editError && (
-                                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                                        <p className="text-red-700 text-sm">{editError}</p>
-                                    </div>
-                                )}
-                                {editSuccess && (
-                                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                                        <p className="text-green-700 text-sm">✅ {editSuccess}</p>
-                                    </div>
-                                )}
-
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Pakan (kg)</label>
-                                        <Input type="number" step="0.1" name="pakan" value={editData.pakan} onChange={handleEditChange} placeholder="0" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Minum (L)</label>
-                                        <Input type="number" step="0.1" name="minum" value={editData.minum} onChange={handleEditChange} placeholder="0" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Bobot (kg)</label>
-                                        <Input type="number" step="0.01" name="bobot" value={editData.bobot} onChange={handleEditChange} placeholder="0" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Populasi</label>
-                                        <Input type="number" name="populasi" value={editData.populasi} onChange={handleEditChange} placeholder="0" />
-                                    </div>
-                                    <div className="col-span-2">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Kematian (Death)</label>
-                                        <Input type="number" name="death" value={editData.death} onChange={handleEditChange} placeholder="0" />
-                                    </div>
-                                </div>
-
-                                <div className="flex justify-end gap-3 pt-2">
-                                    <Button type="button" variant="secondary" onClick={() => setEditingRow(null)}>
-                                        Batal
-                                    </Button>
-                                    <Button type="submit" disabled={updating}>
-                                        {updating ? (
-                                            <>
-                                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                                                Menyimpan...
-                                            </>
-                                        ) : (
-                                            "Simpan Perubahan"
-                                        )}
-                                    </Button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
             )}
 
             {/* Loading */}
@@ -405,12 +346,12 @@ export default function SensorDataPage() {
             {/* Error */}
             {error && !loading && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-                    <p className="text-red-700 text-sm">❌ Gagal mengambil data: {error}</p>
+                    <p className="text-red-700 text-sm">❌ {error}</p>
                 </div>
             )}
 
-            {/* Empty State */}
-            {!loading && !error && data.length === 0 && (
+            {/* Empty */}
+            {!loading && !error && rawData.length === 0 && (
                 <Card>
                     <CardContent className="py-12 text-center">
                         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
@@ -419,21 +360,150 @@ export default function SensorDataPage() {
                             </svg>
                         </div>
                         <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada data sensor</h3>
-                        <p className="text-gray-500 mb-4">Data akan masuk secara otomatis dari perangkat IoT</p>
-                        {canInput && (
-                            <Button onClick={() => setShowForm(true)}>Input Data Manual</Button>
-                        )}
+                        <p className="text-gray-500 mb-4">Data akan masuk otomatis dari IoT device</p>
+                        {canInput && <Button onClick={() => setShowForm(true)}>Input Data Manual</Button>}
                     </CardContent>
                 </Card>
             )}
 
-            {/* Data Table — Single kandang, no kandang column */}
-            {!loading && data.length > 0 && (
+            {/* ============ CHARTS VIEW ============ */}
+            {activeTab === "charts" && chartData.length > 0 && (
+                <div className="space-y-6">
+                    {/* Suhu & Kelembaban */}
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <CardTitle>Suhu & Kelembaban</CardTitle>
+                                <div className="flex items-center gap-4 text-xs">
+                                    <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-orange-500"></span> Suhu (°C)</span>
+                                    <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-blue-500"></span> Kelembaban (%)</span>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <ResponsiveContainer width="100%" height={320}>
+                                <AreaChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <defs>
+                                        <linearGradient id="gradSuhu" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#f97316" stopOpacity={0.15} />
+                                            <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                                        </linearGradient>
+                                        <linearGradient id="gradHum" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
+                                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                    <YAxis yAxisId="suhu" domain={['auto', 'auto']} tick={{ fontSize: 11 }} stroke="#f97316" />
+                                    <YAxis yAxisId="hum" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#3b82f6" />
+                                    <Tooltip contentStyle={customTooltipStyle} />
+                                    <Area yAxisId="suhu" type="monotone" dataKey="suhu" stroke="#f97316" strokeWidth={2} fill="url(#gradSuhu)" name="Suhu (°C)" />
+                                    <Area yAxisId="hum" type="monotone" dataKey="kelembaban" stroke="#3b82f6" strokeWidth={2} fill="url(#gradHum)" name="Kelembaban (%)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+
+                    {/* Amoniak */}
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <CardTitle>Level Amoniak (NH₃)</CardTitle>
+                                <Badge variant="warning">Batas aman: &lt; 10 ppm</Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <ResponsiveContainer width="100%" height={260}>
+                                <AreaChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <defs>
+                                        <linearGradient id="gradAmmo" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+                                            <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                    <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                    <Tooltip contentStyle={customTooltipStyle} />
+                                    {/* Danger threshold line */}
+                                    <Area type="monotone" dataKey="amoniak" stroke="#ef4444" strokeWidth={2} fill="url(#gradAmmo)" name="Amoniak (ppm)" dot={{ r: 3, fill: "#ef4444" }} />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+
+                    {/* Kematian & Populasi */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Kematian Harian</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <ResponsiveContainer width="100%" height={240}>
+                                    <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                        <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#9ca3af" />
+                                        <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" allowDecimals={false} />
+                                        <Tooltip contentStyle={customTooltipStyle} />
+                                        <Bar dataKey="death" fill="#ef4444" name="Kematian" radius={[4, 4, 0, 0]} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Populasi</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <ResponsiveContainer width="100%" height={240}>
+                                    <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                        <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#9ca3af" />
+                                        <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" domain={['auto', 'auto']} />
+                                        <Tooltip contentStyle={customTooltipStyle} />
+                                        <Line type="monotone" dataKey="populasi" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} name="Populasi" />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Pakan & Minum */}
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <CardTitle>Konsumsi Pakan & Minum</CardTitle>
+                                <div className="flex items-center gap-4 text-xs">
+                                    <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-amber-500"></span> Pakan (kg)</span>
+                                    <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-cyan-500"></span> Minum (L)</span>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent>
+                            <ResponsiveContainer width="100%" height={240}>
+                                <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                    <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                    <Tooltip contentStyle={customTooltipStyle} />
+                                    <Line type="monotone" dataKey="pakan" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} name="Pakan (kg)" />
+                                    <Line type="monotone" dataKey="minum" stroke="#06b6d4" strokeWidth={2} dot={{ r: 3 }} name="Minum (L)" />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* ============ TABLE VIEW ============ */}
+            {activeTab === "table" && rawData.length > 0 && (
                 <Card>
                     <CardHeader>
                         <div className="flex items-center justify-between">
                             <CardTitle>Riwayat Data Sensor</CardTitle>
-                            <span className="text-sm text-gray-500">{data.length} data</span>
+                            <span className="text-sm text-gray-500">{rawData.length} data</span>
                         </div>
                     </CardHeader>
                     <CardContent className="p-0">
@@ -441,51 +511,46 @@ export default function SensorDataPage() {
                             <table className="w-full">
                                 <thead>
                                     <tr className="border-b border-gray-200">
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Hari</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Waktu</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Suhu</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Kelembaban</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Amoniak</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Populasi</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Death</th>
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Status</th>
-                                        {canInput && (
-                                            <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Aksi</th>
-                                        )}
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Hari</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Waktu</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Suhu</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Hum</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">NH₃</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Pop</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Death</th>
+                                        <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Status</th>
+                                        {canInput && <th className="text-left py-4 px-4 text-xs font-medium text-gray-500">Aksi</th>}
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {data.map((row: any) => (
-                                        <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                            <td className="py-4 px-6 text-gray-600">Hari {row.hari_ke}</td>
-                                            <td className="py-4 px-6 text-gray-600">{formatTimestamp(row.timestamp)}</td>
-                                            <td className="py-4 px-6">
-                                                <span className={row.suhu > 30 ? "text-red-600 font-medium" : "text-gray-900"}>
+                                    {rawData.map((row: any) => (
+                                        <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50">
+                                            <td className="py-3 px-4 text-sm text-gray-600">H{row.hari_ke}</td>
+                                            <td className="py-3 px-4 text-sm text-gray-600">{formatTimestamp(row.timestamp)}</td>
+                                            <td className="py-3 px-4">
+                                                <span className={row.suhu > 32 ? "text-red-600 font-medium" : "text-gray-900"}>
                                                     {row.suhu}°C
                                                 </span>
                                             </td>
-                                            <td className="py-4 px-6 text-gray-900">{row.kelembaban}%</td>
-                                            <td className="py-4 px-6">
+                                            <td className="py-3 px-4 text-sm text-gray-900">{row.kelembaban}%</td>
+                                            <td className="py-3 px-4">
                                                 <span className={row.amoniak > 10 ? "text-red-600 font-medium" : "text-gray-900"}>
                                                     {row.amoniak} ppm
                                                 </span>
                                             </td>
-                                            <td className="py-4 px-6 text-gray-900">{row.populasi?.toLocaleString() || "-"}</td>
-                                            <td className="py-4 px-6">
+                                            <td className="py-3 px-4 text-sm text-gray-900">{row.populasi?.toLocaleString() || "-"}</td>
+                                            <td className="py-3 px-4">
                                                 <span className={row.death > 0 ? "text-red-600 font-medium" : "text-gray-900"}>
                                                     {row.death ?? 0}
                                                 </span>
                                             </td>
-                                            <td className="py-4 px-6">{getStatusBadge(row.suhu, row.amoniak)}</td>
+                                            <td className="py-3 px-4">{getStatusBadge(row.suhu, row.amoniak)}</td>
                                             {canInput && (
-                                                <td className="py-4 px-6">
+                                                <td className="py-3 px-4">
                                                     <button
                                                         onClick={() => openEditModal(row)}
-                                                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                                                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                                                     >
-                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                                        </svg>
                                                         Edit
                                                     </button>
                                                 </td>
@@ -497,6 +562,53 @@ export default function SensorDataPage() {
                         </div>
                     </CardContent>
                 </Card>
+            )}
+
+            {/* Edit Modal */}
+            {editingRow && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold text-gray-900">Edit Data Manual</h3>
+                            <button onClick={() => setEditingRow(null)} className="text-gray-400 hover:text-gray-600">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <p className="text-sm text-gray-500 mb-4">Hari {editingRow.hari_ke} · {formatTimestamp(editingRow.timestamp)}</p>
+                        <form onSubmit={handleEditSubmit} className="space-y-4">
+                            {editError && <div className="p-3 bg-red-50 border border-red-200 rounded-lg"><p className="text-red-700 text-sm">{editError}</p></div>}
+                            {editSuccess && <div className="p-3 bg-green-50 border border-green-200 rounded-lg"><p className="text-green-700 text-sm">✅ {editSuccess}</p></div>}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Pakan (kg)</label>
+                                    <Input type="number" step="0.1" name="pakan" value={editData.pakan} onChange={handleEditChange} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Minum (L)</label>
+                                    <Input type="number" step="0.1" name="minum" value={editData.minum} onChange={handleEditChange} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Bobot (kg)</label>
+                                    <Input type="number" step="0.01" name="bobot" value={editData.bobot} onChange={handleEditChange} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Populasi</label>
+                                    <Input type="number" name="populasi" value={editData.populasi} onChange={handleEditChange} />
+                                </div>
+                                <div className="col-span-2">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Kematian</label>
+                                    <Input type="number" name="death" value={editData.death} onChange={handleEditChange} />
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-3 pt-2">
+                                <Button type="button" variant="secondary" onClick={() => setEditingRow(null)}>Batal</Button>
+                                <Button type="submit" disabled={updating}>{updating ? "Menyimpan..." : "Simpan"}</Button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             )}
         </div>
     );

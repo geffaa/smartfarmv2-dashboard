@@ -6,17 +6,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useKandangs, useModelInfo, useReloadModels } from "@/hooks/useApi";
-import { predictionsApi } from "@/lib/api";
+import { activityLogsApi } from "@/lib/api";
+import {
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+    ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell,
+} from "recharts";
 
-interface PredictionHistoryItem {
+interface PredictionLog {
     id: string;
-    type: string;
-    result: string;
-    confidence?: number;
-    predicted_deaths?: number;
-    has_risk?: boolean;
-    timestamp: string;
-    input_data?: any;
+    action: string; // "classify" | "forecast"
+    details: {
+        input?: any;
+        prediction?: string;
+        confidence?: number;
+        input_count?: number;
+        predicted_death?: number;
+    };
+    created_at: string;
 }
 
 export default function PredictionsPage() {
@@ -25,54 +31,54 @@ export default function PredictionsPage() {
     const { data: modelInfo, loading: loadingModels } = useModelInfo();
     const { mutate: reloadModels, loading: reloading } = useReloadModels();
 
-    const [predictions, setPredictions] = useState<PredictionHistoryItem[]>([]);
+    const [predictionLogs, setPredictionLogs] = useState<PredictionLog[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [reloadSuccess, setReloadSuccess] = useState(false);
-    const [error, setError] = useState("");
+    const [activeTab, setActiveTab] = useState<"overview" | "history">("overview");
 
     const isAdmin = session?.user?.role === "admin";
     const kandang = kandangData?.items?.[0];
-    const kandangId = kandang?.id;
 
-    // Auto-load prediction history from API
-    const loadPredictionHistory = useCallback(async () => {
-        if (!session?.accessToken || !kandangId) return;
+    // Load prediction history from activity logs
+    const loadHistory = useCallback(async () => {
+        if (!session?.accessToken) return;
         setLoadingHistory(true);
         try {
-            const res: any = await predictionsApi.getHistory(kandangId, session.accessToken);
-            if (res && Array.isArray(res)) {
-                setPredictions(res);
-            } else if (res?.items) {
-                setPredictions(res.items);
-            } else if (res?.data && Array.isArray(res.data)) {
-                setPredictions(res.data);
-            } else if (res?.data?.items) {
-                setPredictions(res.data.items);
+            const res: any = await activityLogsApi.list(
+                { resource: "prediction", per_page: 50 },
+                session.accessToken
+            );
+            let items: PredictionLog[] = [];
+            if (res?.data?.items && Array.isArray(res.data.items)) {
+                items = res.data.items;
+            } else if (res?.items && Array.isArray(res.items)) {
+                items = res.items;
+            } else if (Array.isArray(res?.data)) {
+                items = res.data;
             }
+            setPredictionLogs(items);
         } catch (err) {
-            // Prediction history endpoint may not exist yet — that's ok
             console.log("Prediction history not available:", err);
         } finally {
             setLoadingHistory(false);
         }
-    }, [session?.accessToken, kandangId]);
+    }, [session?.accessToken]);
 
     useEffect(() => {
-        loadPredictionHistory();
-    }, [loadPredictionHistory]);
+        if (status === "authenticated" && session?.accessToken) {
+            loadHistory();
+        }
+    }, [status, session?.accessToken, loadHistory]);
 
-    const handleReloadModels = async () => {
-        setReloadSuccess(false);
+    const handleReload = async () => {
         const result = await reloadModels();
         if (result.success) {
             setReloadSuccess(true);
             setTimeout(() => setReloadSuccess(false), 3000);
-        } else {
-            setError(result.error || "Gagal reload models");
         }
     };
 
-    if (status === "loading" || loadingKandang) {
+    if (status === "loading" || loadingKandang || loadingModels) {
         return (
             <div className="flex justify-center py-12">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
@@ -80,208 +86,413 @@ export default function PredictionsPage() {
         );
     }
 
-    const formatTime = (timestamp: string) => {
-        return new Date(timestamp).toLocaleString("id-ID");
+    // Parse classification & forecast logs
+    const classifyLogs = predictionLogs.filter(l => l.action === "classify");
+    const forecastLogs = predictionLogs.filter(l => l.action === "forecast");
+
+    // Stats
+    const totalPredictions = predictionLogs.length;
+    const normalCount = classifyLogs.filter(l => l.details?.prediction === "Normal").length;
+    const abnormalCount = classifyLogs.filter(l => l.details?.prediction === "Abnormal").length;
+    const deathRiskCount = forecastLogs.filter(l => (l.details?.predicted_death ?? 0) > 0).length;
+
+    // Charts data
+    const classifyChartData = [...classifyLogs].reverse().map(l => ({
+        time: new Date(l.created_at).toLocaleString("id-ID", {
+            hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short",
+        }),
+        confidence: l.details?.confidence ? +(l.details.confidence * 100).toFixed(1) : 0,
+        isAbnormal: l.details?.prediction === "Abnormal" ? 1 : 0,
+    }));
+
+    const forecastChartData = [...forecastLogs].reverse().map(l => ({
+        time: new Date(l.created_at).toLocaleString("id-ID", {
+            hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short",
+        }),
+        predicted_death: l.details?.predicted_death ?? 0,
+    }));
+
+    const pieData = [
+        { name: "Normal", value: normalCount, color: "#10b981" },
+        { name: "Abnormal", value: abnormalCount, color: "#ef4444" },
+    ].filter(d => d.value > 0);
+
+    // Model info parsing
+    const classModel = (modelInfo as any)?.data?.classification_model || (modelInfo as any)?.classification_model;
+    const forecastModel = (modelInfo as any)?.data?.forecasting_model || (modelInfo as any)?.forecasting_model;
+
+    const customTooltipStyle = {
+        backgroundColor: "#fff",
+        border: "1px solid #e5e7eb",
+        borderRadius: "12px",
+        padding: "12px 16px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
     };
 
     return (
         <div className="space-y-6">
-            {/* Page Header */}
-            <div>
-                <h1 className="text-2xl font-bold text-gray-900">Prediksi ML</h1>
-                <p className="text-gray-500 mt-1">
-                    Klasifikasi kondisi kandang dan forecasting mortalitas — berjalan otomatis setiap data sensor masuk
-                </p>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-2xl font-bold text-gray-900">Prediksi ML</h1>
+                    <p className="text-gray-500 mt-1">
+                        Monitoring prediksi otomatis berbasis Machine Learning
+                    </p>
+                </div>
+                <div className="flex items-center gap-3">
+                    <div className="flex bg-gray-100 rounded-lg p-1">
+                        <button
+                            onClick={() => setActiveTab("overview")}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === "overview"
+                                ? "bg-white text-gray-900 shadow-sm"
+                                : "text-gray-500 hover:text-gray-700"
+                                }`}
+                        >
+                            📊 Overview
+                        </button>
+                        <button
+                            onClick={() => setActiveTab("history")}
+                            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === "history"
+                                ? "bg-white text-gray-900 shadow-sm"
+                                : "text-gray-500 hover:text-gray-700"
+                                }`}
+                        >
+                            📋 Riwayat
+                        </button>
+                    </div>
+                    <Button variant="secondary" onClick={loadHistory} disabled={loadingHistory}>
+                        {loadingHistory ? "Memuat..." : "🔄 Refresh"}
+                    </Button>
+                </div>
             </div>
 
-            {/* Auto-prediction badge */}
-            <Card>
-                <CardContent className="flex items-center gap-3 py-3">
-                    <div className="p-2 rounded-lg bg-green-50 text-green-600">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {/* Auto-prediction banner */}
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 rounded-xl p-4">
+                <div className="flex items-start gap-3">
+                    <div className="p-2 bg-indigo-100 rounded-lg">
+                        <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
                     </div>
                     <div>
-                        <p className="text-sm font-medium text-gray-900">Mode Auto-Prediction Aktif</p>
-                        <p className="text-xs text-gray-500">
-                            Setiap data sensor baru dari IoT akan otomatis dianalisis. Notifikasi dikirim jika kondisi abnormal atau ada risiko kematian terdeteksi.
+                        <p className="font-medium text-indigo-900">Auto-Prediction Aktif</p>
+                        <p className="text-sm text-indigo-700 mt-0.5">
+                            Setiap kali IoT mengirim data sensor baru, prediksi ML otomatis berjalan.
+                            Klasifikasi kondisi dan forecasting kematian dilakukan secara real-time.
                         </p>
                     </div>
-                    <Badge variant="success" className="ml-auto">Active</Badge>
-                </CardContent>
-            </Card>
-
-            {/* Model Info */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Card>
-                    <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                            <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                                </svg>
-                            </div>
-                            <div>
-                                <CardTitle>Classification Model</CardTitle>
-                                <p className="text-sm text-gray-500">
-                                    {modelInfo?.classification_model?.type || "Loading..."}
-                                </p>
-                            </div>
-                            {modelInfo?.classification_model?.status && (
-                                <Badge variant="success" className="ml-auto">
-                                    {modelInfo.classification_model.status}
-                                </Badge>
-                            )}
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-2 gap-4 mt-4">
-                            <div>
-                                <p className="text-sm text-gray-500">Output</p>
-                                <p className="text-lg font-bold text-gray-900">
-                                    {modelInfo?.classification_model?.output_classes?.join(" / ") || "Normal / Abnormal"}
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-500">Input Features</p>
-                                <p className="text-sm text-gray-700">
-                                    {modelInfo?.classification_model?.input_features?.join(", ") || "Loading..."}
-                                </p>
-                            </div>
-                            {modelInfo?.classification_model?.metrics && (
-                                <>
-                                    <div>
-                                        <p className="text-sm text-gray-500">Accuracy</p>
-                                        <p className="text-lg font-bold text-green-600">
-                                            {modelInfo.classification_model.metrics.accuracy || "-"}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-sm text-gray-500">F1 Score</p>
-                                        <p className="text-lg font-bold text-blue-600">
-                                            {modelInfo.classification_model.metrics.f1_score || "-"}
-                                        </p>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-
-                <Card>
-                    <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                            <div className="p-3 rounded-xl bg-purple-50 text-purple-600">
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
-                                </svg>
-                            </div>
-                            <div>
-                                <CardTitle>Forecasting Model</CardTitle>
-                                <p className="text-sm text-gray-500">
-                                    {modelInfo?.forecasting_model?.type || "Loading..."}
-                                </p>
-                            </div>
-                            {modelInfo?.forecasting_model?.status && (
-                                <Badge variant="success" className="ml-auto">
-                                    {modelInfo.forecasting_model.status}
-                                </Badge>
-                            )}
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-2 gap-4 mt-4">
-                            <div>
-                                <p className="text-sm text-gray-500">Output</p>
-                                <p className="text-lg font-bold text-gray-900">
-                                    {modelInfo?.forecasting_model?.output || "Death Forecast"}
-                                </p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-500">Window Size</p>
-                                <p className="text-sm text-gray-700">
-                                    {modelInfo?.forecasting_model?.window_size || "Loading..."}
-                                </p>
-                            </div>
-                            {modelInfo?.forecasting_model?.metrics && (
-                                <>
-                                    <div>
-                                        <p className="text-sm text-gray-500">RMSE</p>
-                                        <p className="text-lg font-bold text-green-600">
-                                            {modelInfo.forecasting_model.metrics.rmse || "-"}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-sm text-gray-500">Pearson</p>
-                                        <p className="text-lg font-bold text-blue-600">
-                                            {modelInfo.forecasting_model.metrics.pearson || "-"}
-                                        </p>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
+                </div>
             </div>
 
-            {/* Admin: Reload Models */}
-            {isAdmin && (
-                <Card>
-                    <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm font-medium text-gray-700">Admin: Manage ML Models</p>
-                                <p className="text-xs text-gray-500">Reload model setelah update file model</p>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                {reloadSuccess && (
-                                    <span className="text-sm text-green-600">✅ Models berhasil di-reload!</span>
-                                )}
-                                <Button
-                                    variant="secondary"
-                                    onClick={handleReloadModels}
-                                    disabled={reloading}
-                                >
-                                    {reloading ? (
-                                        <>
-                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2"></div>
-                                            Reloading...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                            </svg>
-                                            Reload Models
-                                        </>
-                                    )}
-                                </Button>
-                            </div>
+            {/* ============ OVERVIEW TAB ============ */}
+            {activeTab === "overview" && (
+                <div className="space-y-6">
+                    {/* Stats cards */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
+                            <p className="text-xs text-blue-600 font-medium">Total Prediksi</p>
+                            <p className="text-2xl font-bold text-gray-900 mt-1">{totalPredictions}</p>
                         </div>
-                    </CardContent>
-                </Card>
+                        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+                            <p className="text-xs text-green-600 font-medium">Kondisi Normal</p>
+                            <p className="text-2xl font-bold text-green-600 mt-1">{normalCount}</p>
+                        </div>
+                        <div className="bg-gradient-to-br from-red-50 to-pink-50 rounded-xl p-4 border border-red-100">
+                            <p className="text-xs text-red-600 font-medium">Kondisi Abnormal</p>
+                            <p className="text-2xl font-bold text-red-600 mt-1">{abnormalCount}</p>
+                        </div>
+                        <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
+                            <p className="text-xs text-orange-600 font-medium">Risiko Kematian</p>
+                            <p className="text-2xl font-bold text-orange-600 mt-1">{deathRiskCount}</p>
+                        </div>
+                    </div>
+
+                    {/* Charts Row */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Classification Distribution Pie */}
+                        {pieData.length > 0 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Distribusi Klasifikasi</CardTitle>
+                                </CardHeader>
+                                <CardContent className="flex justify-center">
+                                    <ResponsiveContainer width="100%" height={260}>
+                                        <PieChart>
+                                            <Pie
+                                                data={pieData}
+                                                cx="50%"
+                                                cy="50%"
+                                                innerRadius={60}
+                                                outerRadius={100}
+                                                paddingAngle={5}
+                                                dataKey="value"
+                                                label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
+                                            >
+                                                {pieData.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.color} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Forecast Death Chart */}
+                        {forecastChartData.length > 0 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Prediksi Kematian</CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <ResponsiveContainer width="100%" height={260}>
+                                        <BarChart data={forecastChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                            <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#9ca3af" />
+                                            <YAxis tick={{ fontSize: 11 }} stroke="#9ca3af" allowDecimals={false} />
+                                            <Tooltip contentStyle={customTooltipStyle} />
+                                            <Bar dataKey="predicted_death" fill="#ef4444" name="Prediksi Kematian" radius={[4, 4, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </CardContent>
+                            </Card>
+                        )}
+                    </div>
+
+                    {/* Confidence Over Time */}
+                    {classifyChartData.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>Confidence Klasifikasi</CardTitle>
+                                    <div className="flex items-center gap-4 text-xs">
+                                        <span className="flex items-center gap-1"><span className="w-3 h-1 rounded bg-purple-500"></span> Confidence (%)</span>
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent>
+                                <ResponsiveContainer width="100%" height={260}>
+                                    <LineChart data={classifyChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                                        <XAxis dataKey="time" tick={{ fontSize: 10 }} stroke="#9ca3af" />
+                                        <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#9ca3af" />
+                                        <Tooltip contentStyle={customTooltipStyle} />
+                                        <Line type="monotone" dataKey="confidence" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} name="Confidence (%)" />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Model Info */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>🧠 Model Klasifikasi</CardTitle>
+                                    <Badge variant="success">Active</Badge>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-500">Tipe</span>
+                                    <span className="font-medium">{classModel?.type || "RandomForestClassifier"}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-500">Output</span>
+                                    <span className="font-medium">Normal / Abnormal</span>
+                                </div>
+                                {classModel?.metrics && (
+                                    <>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">Accuracy</span>
+                                            <span className="font-medium text-green-600">{classModel.metrics.accuracy}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">F1 Score</span>
+                                            <span className="font-medium text-green-600">{classModel.metrics.f1_score}</span>
+                                        </div>
+                                    </>
+                                )}
+                                <div className="pt-2 border-t">
+                                    <p className="text-xs text-gray-400">Input: Suhu, Kelembaban, Amoniak, Pakan, Minum, Bobot, Populasi, Luas Kandang, Hari, Jam</p>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>📈 Model Forecasting</CardTitle>
+                                    <Badge variant="success">Active</Badge>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-500">Tipe</span>
+                                    <span className="font-medium">{forecastModel?.type || "XGBRegressor"}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-gray-500">Output</span>
+                                    <span className="font-medium">Jumlah Kematian Prediksi</span>
+                                </div>
+                                {forecastModel?.metrics && (
+                                    <>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">RMSE</span>
+                                            <span className="font-medium text-green-600">{forecastModel.metrics.rmse}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">Pearson</span>
+                                            <span className="font-medium text-green-600">{forecastModel.metrics.pearson}</span>
+                                        </div>
+                                    </>
+                                )}
+                                <div className="pt-2 border-t">
+                                    <p className="text-xs text-gray-400">Input: 4 data berurutan (temp, hum, ammo, Death) · Window: 2 jam</p>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Admin Reload */}
+                    {isAdmin && (
+                        <Card>
+                            <CardContent className="py-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="font-medium text-gray-900">Admin: Reload ML Models</p>
+                                        <p className="text-sm text-gray-500">Reload model dari disk setelah update file model</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        {reloadSuccess && (
+                                            <span className="text-sm text-green-600">✅ Berhasil</span>
+                                        )}
+                                        <Button variant="secondary" onClick={handleReload} disabled={reloading}>
+                                            {reloading ? "Loading..." : "🔄 Reload Models"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Empty state */}
+                    {totalPredictions === 0 && !loadingHistory && (
+                        <Card>
+                            <CardContent className="py-12 text-center">
+                                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-50 flex items-center justify-center">
+                                    <svg className="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                    </svg>
+                                </div>
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada riwayat prediksi</h3>
+                                <p className="text-gray-500">Prediksi akan muncul otomatis saat IoT simulator mengirim data sensor</p>
+                            </CardContent>
+                        </Card>
+                    )}
+                </div>
             )}
 
-            {/* Info Box */}
-            <Card>
-                <CardContent className="flex items-start gap-4">
-                    <div className="p-3 rounded-xl bg-yellow-50">
-                        <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                    </div>
-                    <div>
-                        <p className="text-gray-900 font-medium">Cara Kerja Auto-Prediction</p>
-                        <ul className="text-gray-500 text-sm mt-1 space-y-1 list-disc list-inside">
-                            <li><strong>Classification:</strong> Setiap data sensor baru otomatis diklasifikasikan sebagai Normal atau Abnormal</li>
-                            <li><strong>Forecasting:</strong> Setelah 4+ data sensor terkumpul, sistem memprediksi potensi kematian ke depan</li>
-                            <li><strong>Notifikasi:</strong> Jika kondisi abnormal atau ada risiko kematian, notifikasi dikirim secara real-time</li>
-                            <li>Hasil prediksi tersimpan otomatis dan dapat dilihat di halaman Notifikasi</li>
-                        </ul>
-                    </div>
-                </CardContent>
-            </Card>
+            {/* ============ HISTORY TAB ============ */}
+            {activeTab === "history" && (
+                <div className="space-y-4">
+                    {loadingHistory && (
+                        <div className="flex justify-center py-8">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
+                        </div>
+                    )}
+
+                    {!loadingHistory && predictionLogs.length === 0 && (
+                        <Card>
+                            <CardContent className="py-12 text-center">
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada riwayat prediksi</h3>
+                                <p className="text-gray-500">Riwayat prediksi ML akan tampil di sini</p>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {!loadingHistory && predictionLogs.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>Riwayat Prediksi</CardTitle>
+                                    <span className="text-sm text-gray-500">{predictionLogs.length} hasil</span>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="p-0">
+                                <div className="divide-y divide-gray-100">
+                                    {predictionLogs.map((log) => {
+                                        const isClassify = log.action === "classify";
+                                        const isAbnormal = log.details?.prediction === "Abnormal";
+                                        const hasRisk = (log.details?.predicted_death ?? 0) > 0;
+
+                                        return (
+                                            <div key={log.id} className="p-4 hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-start gap-4">
+                                                    {/* Icon */}
+                                                    <div className={`p-2.5 rounded-xl ${isClassify
+                                                        ? (isAbnormal ? "bg-red-50" : "bg-green-50")
+                                                        : (hasRisk ? "bg-orange-50" : "bg-blue-50")
+                                                        }`}>
+                                                        {isClassify ? (
+                                                            <svg className={`w-5 h-5 ${isAbnormal ? "text-red-600" : "text-green-600"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                            </svg>
+                                                        ) : (
+                                                            <svg className={`w-5 h-5 ${hasRisk ? "text-orange-600" : "text-blue-600"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                                                            </svg>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Content */}
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <Badge variant={isClassify ? "info" : "default"}>
+                                                                {isClassify ? "Klasifikasi" : "Forecasting"}
+                                                            </Badge>
+                                                            {isClassify ? (
+                                                                <Badge variant={isAbnormal ? "danger" : "success"}>
+                                                                    {log.details?.prediction || "?"}
+                                                                </Badge>
+                                                            ) : (
+                                                                <Badge variant={hasRisk ? "warning" : "success"}>
+                                                                    {hasRisk ? `${log.details?.predicted_death} kematian` : "Aman (0)"}
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-sm text-gray-600">
+                                                            {isClassify
+                                                                ? `Confidence: ${log.details?.confidence ? (log.details.confidence * 100).toFixed(1) + "%" : "N/A"}`
+                                                                : `Data points: ${log.details?.input_count ?? "N/A"}`
+                                                            }
+                                                        </p>
+                                                        {isClassify && log.details?.input && (
+                                                            <p className="text-xs text-gray-400 mt-1">
+                                                                Suhu: {log.details.input.suhu}°C · Hum: {log.details.input.kelembaban}% · NH₃: {log.details.input.amoniak}ppm
+                                                            </p>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Time */}
+                                                    <div className="text-xs text-gray-400 whitespace-nowrap">
+                                                        {new Date(log.created_at).toLocaleString("id-ID", {
+                                                            hour: "2-digit", minute: "2-digit",
+                                                            day: "2-digit", month: "short",
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

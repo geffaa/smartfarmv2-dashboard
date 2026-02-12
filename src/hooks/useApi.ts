@@ -436,10 +436,20 @@ export function useNotifications() {
         setError(null);
 
         try {
-            const response = await notificationsApi.list({}, session.accessToken);
+            const response: any = await notificationsApi.list({}, session.accessToken);
             if (response && typeof response === "object") {
                 if (Array.isArray(response)) {
                     setData({ items: response as Notification[], unread_count: (response as Notification[]).filter(n => !n.is_read).length });
+                } else if ("data" in response && response.data && typeof response.data === "object" && !Array.isArray(response.data)) {
+                    // API returns {status, data: {items, total, unread_count}, message}
+                    const respData = response.data;
+                    if ("items" in respData && Array.isArray(respData.items)) {
+                        const items = respData.items as Notification[];
+                        setData({ items, unread_count: respData.unread_count ?? items.filter(n => !n.is_read).length });
+                    } else if (Array.isArray(respData)) {
+                        const items = respData as Notification[];
+                        setData({ items, unread_count: items.filter(n => !n.is_read).length });
+                    }
                 } else if ("data" in response && Array.isArray(response.data)) {
                     const items = response.data as Notification[];
                     setData({ items, unread_count: items.filter(n => !n.is_read).length });
