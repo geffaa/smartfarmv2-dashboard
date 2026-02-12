@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,25 @@ export default function SensorDataPage() {
     );
     const { mutate: createSensorData, loading: creating } = useCreateSensorData();
     const { mutate: updateSensorData, loading: updating } = useUpdateSensorData();
+
+    // Auto-refresh every 15 seconds
+    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+    const doRefresh = useCallback(() => {
+        refetch();
+        setLastUpdated(new Date());
+    }, [refetch]);
+
+    useEffect(() => {
+        if (kandangId) {
+            setLastUpdated(new Date());
+            intervalRef.current = setInterval(doRefresh, 15000);
+        }
+        return () => {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+        };
+    }, [kandangId, doRefresh]);
 
     const [showForm, setShowForm] = useState(false);
     const [activeTab, setActiveTab] = useState<"charts" | "table">("charts");
@@ -198,7 +217,22 @@ export default function SensorDataPage() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">Data Sensor</h1>
-                    <p className="text-gray-500 mt-1">{kandang.nama} — Monitoring IoT real-time</p>
+                    <div className="flex items-center gap-2 mt-1">
+                        <p className="text-gray-500">{kandang.nama}</p>
+                        <span className="text-gray-300">·</span>
+                        <span className="flex items-center gap-1.5 text-xs text-green-600">
+                            <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                            Live · Auto-refresh 15s
+                        </span>
+                        {lastUpdated && (
+                            <span className="text-xs text-gray-400">
+                                Update: {lastUpdated.toLocaleTimeString("id-ID")}
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className="flex items-center gap-3">
                     {/* Tabs */}

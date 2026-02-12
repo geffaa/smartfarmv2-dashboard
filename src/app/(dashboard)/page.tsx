@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,9 +17,22 @@ export default function DashboardPage() {
     const kandang = kandangData?.items?.[0];
     const kandangId = kandang?.id;
 
-    const { data: sensorData, loading: loadingSensor } = useSensorData(
+    const { data: sensorData, loading: loadingSensor, refetch: refetchSensor } = useSensorData(
         kandangId ? { kandang_id: kandangId } : undefined
     );
+
+    // Auto-refresh dashboard every 20 seconds
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    useEffect(() => {
+        if (kandangId) {
+            intervalRef.current = setInterval(() => {
+                refetchSensor();
+            }, 20000);
+        }
+        return () => {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+        };
+    }, [kandangId, refetchSensor]);
 
     if (status === "loading") {
         return (
