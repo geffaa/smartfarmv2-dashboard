@@ -352,6 +352,10 @@ export const predictionsApi = {
             token,
         });
     },
+
+    getHistory: async (kandangId: string, token?: string) => {
+        return fetchWithAuth(`/api/v1/predictions/history?kandang_id=${kandangId}`, { token });
+    },
 };
 
 // Notifications API

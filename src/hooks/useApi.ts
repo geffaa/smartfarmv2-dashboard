@@ -28,6 +28,7 @@ export interface Kandang {
         pakan?: number;
         minum?: number;
         bobot?: number;
+        death?: number;
         status: string;
     };
 }

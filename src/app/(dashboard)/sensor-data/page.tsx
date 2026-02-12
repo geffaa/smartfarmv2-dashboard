@@ -1,23 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input, Select } from "@/components/ui/input";
-import { useSensorData, useKandangs, useCreateSensorData, useUpdateSensorData, Kandang } from "@/hooks/useApi";
+import { Input } from "@/components/ui/input";
+import { useSensorData, useKandangs, useCreateSensorData, useUpdateSensorData } from "@/hooks/useApi";
 
 export default function SensorDataPage() {
     const { data: session, status } = useSession();
-    const { data: sensorData, loading, error, refetch } = useSensorData();
-    const { data: kandangData } = useKandangs();
+    const { data: kandangData, loading: loadingKandang } = useKandangs();
+
+    // Auto-select first kandang (single-kandang mode)
+    const kandang = kandangData?.items?.[0];
+    const kandangId = kandang?.id;
+
+    const { data: sensorData, loading, error, refetch } = useSensorData(
+        kandangId ? { kandang_id: kandangId } : undefined
+    );
     const { mutate: createSensorData, loading: creating } = useCreateSensorData();
     const { mutate: updateSensorData, loading: updating } = useUpdateSensorData();
 
     const [showForm, setShowForm] = useState(false);
     const [formData, setFormData] = useState({
-        kandang_id: "",
         hari_ke: "",
         tanggal: new Date().toISOString().split("T")[0],
         jam: new Date().toTimeString().slice(0, 5),
@@ -28,7 +34,6 @@ export default function SensorDataPage() {
         minum: "",
         populasi: "",
         bobot: "",
-        luas_kandang: "",
     });
     const [formError, setFormError] = useState("");
     const [formSuccess, setFormSuccess] = useState("");
@@ -45,7 +50,7 @@ export default function SensorDataPage() {
     const [editError, setEditError] = useState("");
     const [editSuccess, setEditSuccess] = useState("");
 
-    if (status === "loading") {
+    if (status === "loading" || loadingKandang) {
         return (
             <div className="flex justify-center py-12">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
@@ -53,8 +58,19 @@ export default function SensorDataPage() {
         );
     }
 
+    if (!kandang) {
+        return (
+            <div className="flex justify-center py-12">
+                <Card>
+                    <CardContent className="py-12 text-center">
+                        <p className="text-gray-500">Belum ada kandang. Hubungi admin untuk setup kandang.</p>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
     const data = sensorData?.items || [];
-    const kandangs = kandangData?.items || [];
     const canInput = session?.user?.role === "admin" || session?.user?.role === "pemilik" || session?.user?.role === "peternak";
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -67,16 +83,11 @@ export default function SensorDataPage() {
         setFormError("");
         setFormSuccess("");
 
-        if (!formData.kandang_id) {
-            setFormError("Pilih kandang terlebih dahulu");
-            return;
-        }
-
         // Create timestamp from tanggal and jam
         const timestamp = `${formData.tanggal}T${formData.jam}:00`;
 
         const payload: any = {
-            kandang_id: formData.kandang_id,
+            kandang_id: kandangId,
             timestamp: timestamp,
             hari_ke: parseInt(formData.hari_ke) || 1,
             suhu: parseFloat(formData.suhu) || 0,
@@ -91,10 +102,9 @@ export default function SensorDataPage() {
         const result = await createSensorData(payload);
 
         if (result.success) {
-            setFormSuccess("Data sensor berhasil disimpan!");
+            setFormSuccess("Data sensor berhasil disimpan! Prediksi ML akan berjalan otomatis.");
             setShowForm(false);
             setFormData({
-                kandang_id: "",
                 hari_ke: "",
                 tanggal: new Date().toISOString().split("T")[0],
                 jam: new Date().toTimeString().slice(0, 5),
@@ -105,7 +115,6 @@ export default function SensorDataPage() {
                 minum: "",
                 populasi: "",
                 bobot: "",
-                luas_kandang: "",
             });
             refetch();
         } else {
@@ -180,7 +189,7 @@ export default function SensorDataPage() {
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">Data Sensor</h1>
                     <p className="text-gray-500 mt-1">
-                        Monitoring dan input data sensor IoT
+                        {kandang.nama} — Data sensor IoT real-time
                     </p>
                 </div>
                 {canInput && (
@@ -197,12 +206,27 @@ export default function SensorDataPage() {
                                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                                 </svg>
-                                Input Data
+                                Input Manual
                             </>
                         )}
                     </Button>
                 )}
             </div>
+
+            {/* Auto-prediction info */}
+            <Card>
+                <CardContent className="flex items-center gap-3 py-3">
+                    <div className="p-2 rounded-lg bg-green-50 text-green-600">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <p className="text-sm font-medium text-gray-900">Prediksi Otomatis Aktif</p>
+                        <p className="text-xs text-gray-500">Setiap data sensor baru akan otomatis dianalisis oleh model ML (klasifikasi + forecast kematian)</p>
+                    </div>
+                </CardContent>
+            </Card>
 
             {/* Success Message */}
             {formSuccess && (
@@ -211,7 +235,7 @@ export default function SensorDataPage() {
                 </div>
             )}
 
-            {/* Input Form */}
+            {/* Input Form (no kandang dropdown — auto-assigned) */}
             {showForm && (
                 <Card>
                     <CardHeader>
@@ -227,21 +251,16 @@ export default function SensorDataPage() {
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Kandang *</label>
-                                    <Select name="kandang_id" value={formData.kandang_id} onChange={handleInputChange} required>
-                                        <option value="">Pilih Kandang</option>
-                                        {kandangs.map((k: Kandang) => (
-                                            <option key={k.id} value={k.id}>{k.nama}</option>
-                                        ))}
-                                    </Select>
-                                </div>
-                                <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Hari Ke-</label>
                                     <Input type="number" name="hari_ke" value={formData.hari_ke} onChange={handleInputChange} placeholder="1" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Tanggal</label>
                                     <Input type="date" name="tanggal" value={formData.tanggal} onChange={handleInputChange} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Jam</label>
+                                    <Input type="time" name="jam" value={formData.jam} onChange={handleInputChange} />
                                 </div>
                             </div>
 
@@ -259,12 +278,12 @@ export default function SensorDataPage() {
                                     <Input type="number" step="0.1" name="amoniak" value={formData.amoniak} onChange={handleInputChange} placeholder="3.2" />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Jam</label>
-                                    <Input type="time" name="jam" value={formData.jam} onChange={handleInputChange} />
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Bobot (kg)</label>
+                                    <Input type="number" step="0.01" name="bobot" value={formData.bobot} onChange={handleInputChange} placeholder="1.2" />
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Pakan (kg)</label>
                                     <Input type="number" step="0.1" name="pakan" value={formData.pakan} onChange={handleInputChange} placeholder="150" />
@@ -276,10 +295,6 @@ export default function SensorDataPage() {
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Populasi</label>
                                     <Input type="number" name="populasi" value={formData.populasi} onChange={handleInputChange} placeholder="4850" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Bobot (kg)</label>
-                                    <Input type="number" step="0.01" name="bobot" value={formData.bobot} onChange={handleInputChange} placeholder="1.2" />
                                 </div>
                             </div>
 
@@ -321,8 +336,7 @@ export default function SensorDataPage() {
                             </div>
 
                             <p className="text-sm text-gray-500 mb-4">
-                                Kandang: <span className="font-medium text-gray-700">{editingRow.kandang?.nama || "N/A"}</span>
-                                {" · "}Hari {editingRow.hari_ke} · {formatTimestamp(editingRow.timestamp)}
+                                Hari {editingRow.hari_ke} · {formatTimestamp(editingRow.timestamp)}
                             </p>
 
                             <form onSubmit={handleEditSubmit} className="space-y-4">
@@ -340,56 +354,23 @@ export default function SensorDataPage() {
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Pakan (kg)</label>
-                                        <Input
-                                            type="number"
-                                            step="0.1"
-                                            name="pakan"
-                                            value={editData.pakan}
-                                            onChange={handleEditChange}
-                                            placeholder="0"
-                                        />
+                                        <Input type="number" step="0.1" name="pakan" value={editData.pakan} onChange={handleEditChange} placeholder="0" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Minum (L)</label>
-                                        <Input
-                                            type="number"
-                                            step="0.1"
-                                            name="minum"
-                                            value={editData.minum}
-                                            onChange={handleEditChange}
-                                            placeholder="0"
-                                        />
+                                        <Input type="number" step="0.1" name="minum" value={editData.minum} onChange={handleEditChange} placeholder="0" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Bobot (kg)</label>
-                                        <Input
-                                            type="number"
-                                            step="0.01"
-                                            name="bobot"
-                                            value={editData.bobot}
-                                            onChange={handleEditChange}
-                                            placeholder="0"
-                                        />
+                                        <Input type="number" step="0.01" name="bobot" value={editData.bobot} onChange={handleEditChange} placeholder="0" />
                                     </div>
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Populasi</label>
-                                        <Input
-                                            type="number"
-                                            name="populasi"
-                                            value={editData.populasi}
-                                            onChange={handleEditChange}
-                                            placeholder="0"
-                                        />
+                                        <Input type="number" name="populasi" value={editData.populasi} onChange={handleEditChange} placeholder="0" />
                                     </div>
                                     <div className="col-span-2">
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Kematian (Death)</label>
-                                        <Input
-                                            type="number"
-                                            name="death"
-                                            value={editData.death}
-                                            onChange={handleEditChange}
-                                            placeholder="0"
-                                        />
+                                        <Input type="number" name="death" value={editData.death} onChange={handleEditChange} placeholder="0" />
                                     </div>
                                 </div>
 
@@ -404,12 +385,7 @@ export default function SensorDataPage() {
                                                 Menyimpan...
                                             </>
                                         ) : (
-                                            <>
-                                                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                                </svg>
-                                                Simpan Perubahan
-                                            </>
+                                            "Simpan Perubahan"
                                         )}
                                     </Button>
                                 </div>
@@ -443,32 +419,35 @@ export default function SensorDataPage() {
                             </svg>
                         </div>
                         <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada data sensor</h3>
-                        <p className="text-gray-500 mb-4">Mulai dengan menginput data sensor pertama</p>
+                        <p className="text-gray-500 mb-4">Data akan masuk secara otomatis dari perangkat IoT</p>
                         {canInput && (
-                            <Button onClick={() => setShowForm(true)}>Input Data Sensor</Button>
+                            <Button onClick={() => setShowForm(true)}>Input Data Manual</Button>
                         )}
                     </CardContent>
                 </Card>
             )}
 
-            {/* Data Table */}
+            {/* Data Table — Single kandang, no kandang column */}
             {!loading && data.length > 0 && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Riwayat Data Sensor</CardTitle>
+                        <div className="flex items-center justify-between">
+                            <CardTitle>Riwayat Data Sensor</CardTitle>
+                            <span className="text-sm text-gray-500">{data.length} data</span>
+                        </div>
                     </CardHeader>
                     <CardContent className="p-0">
                         <div className="overflow-x-auto">
                             <table className="w-full">
                                 <thead>
                                     <tr className="border-b border-gray-200">
-                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Kandang</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Hari</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Waktu</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Suhu</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Kelembaban</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Amoniak</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Populasi</th>
+                                        <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Death</th>
                                         <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Status</th>
                                         {canInput && (
                                             <th className="text-left py-4 px-6 text-sm font-medium text-gray-500">Aksi</th>
@@ -478,9 +457,6 @@ export default function SensorDataPage() {
                                 <tbody>
                                     {data.map((row: any) => (
                                         <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                            <td className="py-4 px-6">
-                                                <span className="font-medium text-gray-900">{row.kandang?.nama || "N/A"}</span>
-                                            </td>
                                             <td className="py-4 px-6 text-gray-600">Hari {row.hari_ke}</td>
                                             <td className="py-4 px-6 text-gray-600">{formatTimestamp(row.timestamp)}</td>
                                             <td className="py-4 px-6">
@@ -495,6 +471,11 @@ export default function SensorDataPage() {
                                                 </span>
                                             </td>
                                             <td className="py-4 px-6 text-gray-900">{row.populasi?.toLocaleString() || "-"}</td>
+                                            <td className="py-4 px-6">
+                                                <span className={row.death > 0 ? "text-red-600 font-medium" : "text-gray-900"}>
+                                                    {row.death ?? 0}
+                                                </span>
+                                            </td>
                                             <td className="py-4 px-6">{getStatusBadge(row.suhu, row.amoniak)}</td>
                                             {canInput && (
                                                 <td className="py-4 px-6">
