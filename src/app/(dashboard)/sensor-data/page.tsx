@@ -55,6 +55,17 @@ export default function SensorDataPage() {
     const [editError, setEditError] = useState("");
     const [editSuccess, setEditSuccess] = useState("");
 
+    // Merge live WS readings with initial API data (must be before early returns!)
+    const rawApiData = sensorData?.items || [];
+    const rawData = useMemo(() => {
+        if (liveReadings.length === 0) return rawApiData;
+        const apiIds = new Set(rawApiData.map((r: any) => r.id));
+        const uniqueLive = liveReadings.filter(lr => !apiIds.has(lr.id));
+        return [...uniqueLive, ...rawApiData];
+    }, [liveReadings, rawApiData]);
+
+    const canInput = session?.user?.role === "admin" || session?.user?.role === "pemilik" || session?.user?.role === "peternak";
+
     if (status === "loading" || loadingKandang) {
         return (
             <div className="flex justify-center py-12">
@@ -74,18 +85,6 @@ export default function SensorDataPage() {
             </div>
         );
     }
-
-    // Merge live WS readings with initial API data
-    // liveReadings are newest-first, rawApiData are also newest-first
-    const rawApiData = sensorData?.items || [];
-    const rawData = useMemo(() => {
-        if (liveReadings.length === 0) return rawApiData;
-        // Deduplicate: live readings may overlap with API data
-        const apiIds = new Set(rawApiData.map((r: any) => r.id));
-        const uniqueLive = liveReadings.filter(lr => !apiIds.has(lr.id));
-        return [...uniqueLive, ...rawApiData];
-    }, [liveReadings, rawApiData]);
-    const canInput = session?.user?.role === "admin" || session?.user?.role === "pemilik" || session?.user?.role === "peternak";
 
     // Prepare chart data (reverse to chronological order, oldest first)
     const chartData = [...rawData].reverse().map((row: any) => ({
