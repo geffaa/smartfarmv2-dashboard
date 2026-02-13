@@ -249,7 +249,7 @@ export default function PredictionsPage() {
                 <CardHeader>
                     <div className="flex items-center justify-between">
                         <CardTitle>Riwayat Prediksi</CardTitle>
-                        <span className="text-sm text-gray-500">{predictionLogs.length} hasil</span>
+                        <span className="mx-2 text-md text-gray-500">{predictionLogs.length} hasil</span>
                     </div>
                 </CardHeader>
                 <CardContent className="p-0">

@@ -205,7 +205,7 @@ export default function DashboardPage() {
                             <div className="flex items-center justify-between">
                                 <CardTitle>Data Sensor Terbaru</CardTitle>
                                 <Link href="/sensor-data">
-                                    <button className="text-sm text-green-600 hover:text-green-700">Lihat Semua</button>
+                                    <button className="text-sm mx-2 text-green-600 hover:text-green-700">Lihat Semua</button>
                                 </Link>
                             </div>
                         </CardHeader>
@@ -267,7 +267,7 @@ export default function DashboardPage() {
                             <div className="flex items-center justify-between">
                                 <CardTitle>Notifikasi</CardTitle>
                                 <Link href="/notifications">
-                                    <button className="text-sm text-green-600 hover:text-green-700">Semua</button>
+                                    <button className="text-sm mx-2 text-green-600 hover:text-green-700">Semua</button>
                                 </Link>
                             </div>
                         </CardHeader>

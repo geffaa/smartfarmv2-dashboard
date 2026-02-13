@@ -1113,17 +1113,12 @@ export function useNotificationWebSocket(
 
                     const message = JSON.parse(event.data);
 
-                    // Backend sends: { type: "notification", data: { ... } }
-                    if (onNotificationRef.current) {
-                        if (message.type === "notification" && message.data) {
-                            onNotificationRef.current(message.data);
-                        } else {
-                            // Direct notification object
-                            onNotificationRef.current(message);
-                        }
+                    // Only handle notification messages, ignore sensor_data etc.
+                    if (message.type === "notification" && message.data && onNotificationRef.current) {
+                        onNotificationRef.current(message.data);
                     }
-                } catch (e) {
-                    console.error("WS message parse error:", e);
+                } catch {
+                    // Non-JSON messages are fine
                 }
             };
 
@@ -1144,8 +1139,8 @@ export function useNotificationWebSocket(
                 }
             };
 
-            ws.onerror = (err) => {
-                console.error("WS error:", err);
+            ws.onerror = () => {
+                // onerror is always followed by onclose which handles reconnection
             };
 
             wsRef.current = ws;
